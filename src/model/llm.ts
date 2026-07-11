@@ -139,6 +139,11 @@ const DEFAULT_FACTORY: ModelFactory = (name, opts) =>
     model: name,
     ...opts,
     apiKey: getApiKey('OPENAI_API_KEY'),
+    // GPT-5.6 (Sol/Terra/Luna) rejects function tools + reasoning_effort on
+    // /v1/chat/completions; the reasoning ladder lives on the Responses API
+    // (GA 2026-07-09). @langchain/openai auto-flags 5.6 as a reasoning model,
+    // so route it to the Responses API explicitly. (2026-07-11)
+    ...(name.startsWith('gpt-5.6') && { useResponsesApi: true }),
   });
 
 export function getChatModel(

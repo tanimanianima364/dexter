@@ -16,7 +16,7 @@ import { classifyError, isNonRetryableError } from '@/utils/errors';
 import { resolveProvider, getProviderById } from '@/providers';
 
 export const DEFAULT_PROVIDER = 'openai';
-export const DEFAULT_MODEL = 'gpt-5.4';
+export const DEFAULT_MODEL = 'gpt-5.6-sol';
 
 /**
  * Gets the fast model variant for the given provider.
@@ -132,6 +132,15 @@ const MODEL_FACTORIES: Record<string, ModelFactory> = {
       ...opts,
       ...(process.env.OLLAMA_BASE_URL ? { baseUrl: process.env.OLLAMA_BASE_URL } : {}),
     }),
+  'ollama-cloud': (name, opts) => {
+    const apiKey = process.env.OLLAMA_CLOUD_API_KEY;
+    return new ChatOllama({
+      model: name.replace(/^ollama-cloud:/, ''),
+      ...opts,
+      baseUrl: 'https://ollama.com',
+      headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+    });
+  },
 };
 
 const DEFAULT_FACTORY: ModelFactory = (name, opts) =>
@@ -139,11 +148,8 @@ const DEFAULT_FACTORY: ModelFactory = (name, opts) =>
     model: name,
     ...opts,
     apiKey: getApiKey('OPENAI_API_KEY'),
-    // GPT-5.6 (Sol/Terra/Luna) rejects function tools + reasoning_effort on
-    // /v1/chat/completions; the reasoning ladder lives on the Responses API
-    // (GA 2026-07-09). @langchain/openai auto-flags 5.6 as a reasoning model,
-    // so route it to the Responses API explicitly. (2026-07-11)
-    ...(name.startsWith('gpt-5.6') && { useResponsesApi: true }),
+    // GPT-5.6 requires the Responses API when reasoning and function tools are combined.
+    useResponsesApi: name.startsWith('gpt-5.6-'),
   });
 
 export function getChatModel(

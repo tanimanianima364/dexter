@@ -16,7 +16,7 @@ Search the web for current information on any topic. Returns relevant search res
 
 ## When NOT to Use
 
-- Structured financial data (company financials, SEC filings, analyst estimates, key ratios - use get_financials instead)
+- Structured financial data (company financials, SEC filings, key ratios - use get_financials instead)
 - Pure conceptual/definitional questions ("What is a DCF?")
 
 ## Usage Notes
@@ -29,4 +29,5 @@ Search the web for current information on any topic. Returns relevant search res
 export { tavilySearch } from './tavily.js';
 export { exaSearch } from './exa.js';
 export { perplexitySearch } from './perplexity.js';
+export { langSearch } from './langsearch.js';
 export { xSearchTool, X_SEARCH_DESCRIPTION } from './x-search.js';

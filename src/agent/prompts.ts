@@ -85,7 +85,11 @@ ${skillList}
 - Do not invoke a skill that has already been invoked for the current query`;
 }
 
-function buildMemorySection(memoryFiles: string[], memoryContext?: string | null): string {
+function buildMemorySection(memoryFiles: string[], memoryContext?: string | null,
+                           hasMemoryTools = true): string {
+  // A run without the memory tools must not be told to "ALWAYS call
+  // memory_search first": the tool is not bound and the turn is wasted.
+  if (!hasMemoryTools) return '';
   const fileListSection = memoryFiles.length > 0
     ? `\nMemory files on disk: ${memoryFiles.join(', ')}`
     : '';
@@ -220,8 +224,9 @@ export function buildSystemPrompt(
   memoryFiles?: string[],
   memoryContext?: string | null,
   rulesContent?: string | null,
+  boundToolNames?: string[],
 ): string {
-  const toolDescriptions = buildCompactToolDescriptions(model);
+  const toolDescriptions = buildCompactToolDescriptions(model, boundToolNames);
   const profile = getChannelProfile(channel);
 
   const behaviorBullets = profile.behavior.map(b => `- ${b}`).join('\n');
@@ -229,6 +234,21 @@ export function buildSystemPrompt(
 
   const tablesSection = profile.tables
     ? `\n## Tables (for comparative/tabular data)\n\n${profile.tables}`
+    : '';
+
+  // These policy lines name specific tools. When the caller says which tools are
+  // bound (a headless run passes a toolAllowlist), instructing the model to use
+  // one it does not have wastes turns -- read_file in particular, since the
+  // persisted-result notice points at it.
+  const has = (name: string): boolean => !boundToolNames || boundToolNames.includes(name);
+  const persistedReader = has('read_file')
+    ? 'read_file'
+    : (has('read_tool_result') ? 'read_tool_result' : 'the reader named in the notice');
+  const subagentPolicy = has('spawn_subagent')
+    ? `
+- Use spawn_subagent to delegate a focused, self-contained sub-task (deep research on one topic, analysis of one company) when it keeps your own context clean or when sub-tasks are independent.
+- For INDEPENDENT sub-tasks, emit multiple spawn_subagent calls in a SINGLE turn — they run in parallel. Chain across turns only when one sub-task depends on another's output.
+- Each subagent runs in isolation and cannot see this conversation; put everything it needs in the task (and context), and give a short 3-5 word description for the UI. It returns one final answer for you to synthesize. Don't delegate trivial single-tool lookups you can do directly.`
     : '';
 
   return `You are Dexter, a ${profile.label} assistant with access to research tools.
@@ -245,15 +265,12 @@ ${toolDescriptions}
 
 - Call get_financials or get_market_data ONCE with the full natural language query — they handle multi-company/multi-metric requests internally. Do NOT break up queries into multiple calls.
 - Only use web_fetch when headlines are insufficient (need quotes, deal specifics, earnings details).
-- Tool results are automatically capped. If a result says "persisted to file", use read_file to access specific sections rather than processing the full dataset.
-- Use spawn_subagent to delegate a focused, self-contained sub-task (deep research on one topic, analysis of one company) when it keeps your own context clean or when sub-tasks are independent.
-- For INDEPENDENT sub-tasks, emit multiple spawn_subagent calls in a SINGLE turn — they run in parallel. Chain across turns only when one sub-task depends on another's output.
-- Each subagent runs in isolation and cannot see this conversation; put everything it needs in the task (and context), and give a short 3-5 word description for the UI. It returns one final answer for you to synthesize. Don't delegate trivial single-tool lookups you can do directly.
+- Tool results are automatically capped. If a result says "persisted to file", use ${persistedReader} to access specific sections rather than processing the full dataset.${subagentPolicy}
 - Only respond directly for conceptual definitions, stable historical facts, or conversational queries.
 
 ${buildSkillsSection()}
 
-${buildMemorySection(memoryFiles ?? [], memoryContext)}
+${buildMemorySection(memoryFiles ?? [], memoryContext, has('memory_search') || has('memory_update'))}
 
 ## Behavior
 
@@ -265,11 +282,11 @@ The following rules were set by the user. Follow them on every query.
 
 ${rulesContent}
 ` : ''}
-## Rule Management
+${has('write_file') || has('edit_file') ? `## Rule Management
 
 To manage research rules, the user can say "add a rule", "show my rules", "remove rule about X".
 Rules are stored in .dexter/RULES.md — use write_file or edit_file to modify them.
-
+` : ''}
 ${soulContent ? `## Identity
 
 ${soulContent}

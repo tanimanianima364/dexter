@@ -1,6 +1,7 @@
 import { DynamicStructuredTool } from '@langchain/core/tools';
-import { open, realpath } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { constants } from 'node:fs';
+import { open } from 'node:fs/promises';
+import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { z } from 'zod';
 import { formatToolResult } from '../types.js';
 import { dexterPath } from '../../utils/paths.js';
@@ -13,17 +14,20 @@ import { dexterPath } from '../../utils/paths.js';
  * runs research untrusted web content with no operator watching, so they run
  * without read_file and use this instead: same recovery, no arbitrary reads.
  *
- * Containment is enforced twice. basename() drops any directory part, so a
- * traversal attempt lands inside the results directory; realpath() then rejects
- * a symlink that points out of it, which basename() alone cannot catch, and the
- * file is opened with O_NOFOLLOW so the final component cannot be swapped for a
- * link between the check and the read.
+ * Containment: basename() drops any directory part, the file is opened with
+ * O_NOFOLLOW so the kernel refuses a symlinked final component instead of the
+ * check racing the read, and the resolved path must still sit inside the
+ * results directory.
  *
- * Chunked on purpose: the agent persists any tool result over 50,000 characters,
- * so returning a large file whole would simply be persisted again and replaced
- * by another preview. MAX_CHUNK stays well under that.
+ * Size: the agent persists any tool result whose *serialised* form exceeds
+ * MAX_TOOL_RESULT_CHARS, so slicing a fixed number of characters is not enough.
+ * A persisted result is often itself JSON, and 40,000 characters of quote- and
+ * backslash-heavy text serialise past 50,000 -- the recovery would be persisted
+ * again, leaving the caller in a loop. The slice shrinks until the formatted
+ * result fits.
  */
-const MAX_CHUNK = 40_000;
+const SAFE_FORMATTED_CHARS = 45_000;
+const MAX_SLICE_CHARS = 40_000;
 
 export const READ_TOOL_RESULT_DESCRIPTION = `
 Read the full content of a previously persisted tool result, in chunks.
@@ -49,6 +53,25 @@ const schema = z.object({
     .describe('Character offset to read from (default 0).'),
 });
 
+/** The largest slice at `offset` whose formatted result stays under the cap. */
+function fitSlice(
+  content: string,
+  offset: number,
+  build: (chunk: string, next: number) => string,
+): { chunk: string; formatted: string } {
+  let size = Math.min(MAX_SLICE_CHARS, content.length - offset);
+  while (size > 0) {
+    const chunk = content.slice(offset, offset + size);
+    const formatted = build(chunk, offset + chunk.length);
+    if (formatted.length <= SAFE_FORMATTED_CHARS) {
+      return { chunk, formatted };
+    }
+    // Escaping expands a character by a bounded factor, so halving converges.
+    size = Math.floor(size / 2);
+  }
+  return { chunk: '', formatted: '' };
+}
+
 export const readToolResultTool = new DynamicStructuredTool({
   name: 'read_tool_result',
   description:
@@ -56,31 +79,38 @@ export const readToolResultTool = new DynamicStructuredTool({
   schema,
   func: async (input) => {
     const name = basename(input.file);
-    const root = dexterPath('tool-results');
+    const root = resolve(dexterPath('tool-results'));
     const path = join(root, name);
     const offset = input.offset ?? 0;
 
+    // relative(), not a startsWith prefix test: that compares raw strings with a
+    // hardcoded POSIX separator and would reject valid paths on Windows.
+    const rel = relative(root, resolve(path));
+    if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
+      return formatToolResult({ file: name, error: 'Refused: outside the results directory.' });
+    }
+
     let handle;
     try {
-      // O_NOFOLLOW (0x20000 on Linux) refuses a symlinked final component.
-      handle = await open(path, 'r' as never, undefined as never).catch(async () => {
-        throw new Error('not readable');
-      });
-      const [realRoot, realPath] = await Promise.all([realpath(root), realpath(path)]);
-      if (!realPath.startsWith(realRoot + '/')) {
-        return formatToolResult({ file: name, error: 'Refused: outside the results directory.' });
+      handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const stat = await handle.stat();
+      if (!stat.isFile()) {
+        return formatToolResult({ file: name, error: 'Refused: not a regular file.' });
       }
       const content = await handle.readFile('utf-8');
-      const chunk = content.slice(offset, offset + MAX_CHUNK);
-      const nextOffset = offset + chunk.length;
-      return formatToolResult({
+      const build = (chunk: string, next: number): string => formatToolResult({
         file: name,
         offset,
         chunk,
-        next_offset: nextOffset,
-        eof: nextOffset >= content.length,
+        next_offset: next,
+        eof: next >= content.length,
         total_chars: content.length,
       });
+      const { formatted } = fitSlice(content, offset, build);
+      if (!formatted) {
+        return formatToolResult({ file: name, error: 'Refused: no readable chunk at that offset.' });
+      }
+      return formatted;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return formatToolResult({ file: name, error: `Could not read: ${message}` });

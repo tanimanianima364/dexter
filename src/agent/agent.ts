@@ -117,6 +117,9 @@ export class Agent {
         memoryFiles,
         memoryContext,
         rulesContent,
+        // Describe only the tools this agent actually has; `tools` is already
+        // filtered by toolAllowlist and the channel above.
+        tools.map((t) => t.name),
       );
     }
     return new Agent(config, tools, systemPrompt, concurrencyMap);

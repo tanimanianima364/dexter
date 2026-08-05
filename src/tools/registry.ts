@@ -268,8 +268,16 @@ export function getTools(model: string): StructuredToolInterface[] {
  * Uses 1-2 sentence descriptions instead of full multi-paragraph ones.
  * The LLM already has full tool schemas via bindTools().
  */
-export function buildCompactToolDescriptions(model: string): string {
-  return getToolRegistry(model)
+export function buildCompactToolDescriptions(model: string, boundNames?: string[]): string {
+  // Filtered by what is actually bound when the caller knows: a headless run
+  // passes a toolAllowlist, and describing the unbound rest tells the model to
+  // read persisted results with read_file, spawn subagents and call
+  // memory_search -- none of which exist in that run.
+  const registry = getToolRegistry(model);
+  const described = boundNames
+    ? registry.filter((t) => boundNames.includes(t.name))
+    : registry;
+  return described
     .map((t) => `- **${t.name}**: ${t.compactDescription}`)
     .join('\n');
 }

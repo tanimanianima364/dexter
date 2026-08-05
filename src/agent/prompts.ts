@@ -268,7 +268,7 @@ ${toolDescriptions}
 - Tool results are automatically capped. If a result says "persisted to file", use ${persistedReader} to access specific sections rather than processing the full dataset.${subagentPolicy}
 - Only respond directly for conceptual definitions, stable historical facts, or conversational queries.
 
-${buildSkillsSection()}
+${has('skill') ? buildSkillsSection() : ''}
 
 ${buildMemorySection(memoryFiles ?? [], memoryContext, has('memory_search') || has('memory_update'))}
 

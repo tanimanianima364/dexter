@@ -1,6 +1,6 @@
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import { constants } from 'node:fs';
-import { open } from 'node:fs/promises';
+import { lstat, open, realpath } from 'node:fs/promises';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { z } from 'zod';
 import { formatToolResult } from '../types.js';
@@ -25,9 +25,15 @@ import { dexterPath } from '../../utils/paths.js';
  * backslash-heavy text serialise past 50,000 -- the recovery would be persisted
  * again, leaving the caller in a loop. The slice shrinks until the formatted
  * result fits.
+ *
+ * Persisted results reach several hundred thousand characters in practice
+ * (469,362 was the largest on this machine), so a full recovery can exceed the
+ * run's iteration budget. The description tells the model to read the part it
+ * needs rather than stream the file.
  */
-const SAFE_FORMATTED_CHARS = 45_000;
-const MAX_SLICE_CHARS = 40_000;
+// The agent persists anything over 50,000, so 48,000 keeps a margin while
+// spending as little of the iteration budget per read as possible.
+const SAFE_FORMATTED_CHARS = 48_000;
 
 export const READ_TOOL_RESULT_DESCRIPTION = `
 Read the full content of a previously persisted tool result, in chunks.
@@ -41,6 +47,8 @@ Read the full content of a previously persisted tool result, in chunks.
 
 - Call with the file name from the notice; read further with the returned
   next_offset until eof is true
+- Results can be hundreds of thousands of characters, and each call costs one
+  step of your budget: read the part you need rather than the whole file
 
 ## When NOT to Use
 
@@ -53,23 +61,39 @@ const schema = z.object({
     .describe('Character offset to read from (default 0).'),
 });
 
-/** The largest slice at `offset` whose formatted result stays under the cap. */
+/**
+ * The largest slice at `offset` whose formatted result stays under the cap,
+ * found by binary search.
+ *
+ * Halving instead would waste most of each call on escape-heavy content -- if
+ * 40,000 does not fit, the next try is 20,000 even when 34,000 would. That
+ * matters because the caller has maxIterations (5 by default) for the whole
+ * research turn, and every read spends one.
+ */
 function fitSlice(
   content: string,
   offset: number,
   build: (chunk: string, next: number) => string,
 ): { chunk: string; formatted: string } {
-  let size = Math.min(MAX_SLICE_CHARS, content.length - offset);
-  while (size > 0) {
+  const remaining = content.length - offset;
+  if (remaining <= 0) return { chunk: '', formatted: '' };
+
+  let lo = 0;
+  let hi = remaining;
+  let best = { chunk: '', formatted: '' };
+  while (lo <= hi) {
+    const size = Math.floor((lo + hi) / 2);
+    if (size === 0) break;
     const chunk = content.slice(offset, offset + size);
     const formatted = build(chunk, offset + chunk.length);
     if (formatted.length <= SAFE_FORMATTED_CHARS) {
-      return { chunk, formatted };
+      best = { chunk, formatted };
+      lo = size + 1;
+    } else {
+      hi = size - 1;
     }
-    // Escaping expands a character by a bounded factor, so halving converges.
-    size = Math.floor(size / 2);
   }
-  return { chunk: '', formatted: '' };
+  return best;
 }
 
 export const readToolResultTool = new DynamicStructuredTool({
@@ -88,6 +112,30 @@ export const readToolResultTool = new DynamicStructuredTool({
     const rel = relative(root, resolve(path));
     if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
       return formatToolResult({ file: name, error: 'Refused: outside the results directory.' });
+    }
+
+    // O_NOFOLLOW only guards the final component, so the directories above it
+    // have to be checked separately: with `.dexter/tool-results -> /etc`, a
+    // request for "passwd" is lexically fine and passwd is not itself a link,
+    // and the read succeeds (reproduced 2026-08-05). Both `.dexter` and the
+    // results directory must be real directories, and the resolved root must
+    // still sit inside the workspace this process was started in.
+    try {
+      const anchor = await realpath(process.cwd());
+      for (const dir of [resolve(dexterPath()), root]) {
+        const info = await lstat(dir);
+        if (info.isSymbolicLink() || !info.isDirectory()) {
+          return formatToolResult({ file: name, error: 'Refused: results directory is not a real directory.' });
+        }
+      }
+      const realRoot = await realpath(root);
+      const fromAnchor = relative(anchor, realRoot);
+      if (fromAnchor.startsWith('..') || isAbsolute(fromAnchor)) {
+        return formatToolResult({ file: name, error: 'Refused: results directory escapes the workspace.' });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return formatToolResult({ file: name, error: `Could not verify the results directory: ${message}` });
     }
 
     let handle;

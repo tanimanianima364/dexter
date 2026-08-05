@@ -40,13 +40,25 @@ export function persistLargeResult(
 /**
  * Build the replacement content for a persisted tool result.
  */
+/**
+ * The reader to name in the notice, given the tools actually bound. Naming a
+ * tool the run does not have sends the model at something it cannot call, and a
+ * headless run has no read_file.
+ */
+export function persistedReaderName(boundToolNames?: string[]): string {
+  if (!boundToolNames || boundToolNames.includes('read_file')) return 'read_file';
+  if (boundToolNames.includes('read_tool_result')) return 'read_tool_result';
+  return 'the reader listed in your tools';
+}
+
 export function buildPersistedContent(
   filePath: string,
   preview: string,
   originalSizeBytes: number,
+  readerName: string = 'read_file',
 ): string {
   const sizeKB = Math.round(originalSizeBytes / 1024);
-  return `[Result persisted to ${filePath} (${sizeKB} KB)]\n\nPreview:\n${preview}\n\nUse read_tool_result (or read_file) to access the full result if needed.`;
+  return `[Result persisted to ${filePath} (${sizeKB} KB)]\n\nPreview:\n${preview}\n\nUse ${readerName} to access the full result if needed.`;
 }
 
 /**

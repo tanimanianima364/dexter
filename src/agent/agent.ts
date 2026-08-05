@@ -6,7 +6,7 @@ import { buildSystemPrompt, loadSoulDocument, loadRulesDocument } from './prompt
 import { extractTextContent, hasToolCalls } from '../utils/ai-message.js';
 import { InMemoryChatHistory } from '../utils/in-memory-chat-history.js';
 import { estimateTokens, getAutoCompactThreshold, KEEP_TOOL_USES } from '../utils/tokens.js';
-import { exceedsSizeCap, persistLargeResult, buildPersistedContent } from '../utils/tool-result-storage.js';
+import { exceedsSizeCap, persistLargeResult, buildPersistedContent, persistedReaderName } from '../utils/tool-result-storage.js';
 import { enforceResultBudget } from '../utils/tool-result-budget.js';
 import { formatUserFacingError, isContextOverflowError } from '../utils/errors.js';
 import type { AgentConfig, AgentEvent, CompactionEvent, ContextClearedEvent, MicrocompactEvent, QueueDrainEvent, StreamMode, StreamProgressEvent, TokenUsage } from '../agent/types.js';
@@ -232,7 +232,8 @@ export class Agent {
         if (exceedsSizeCap(content)) {
           const { preview, filePath } = persistLargeResult(tm.name ?? 'unknown', tm.tool_call_id, content);
           return new ToolMessage({
-            content: buildPersistedContent(filePath, preview, content.length),
+            content: buildPersistedContent(filePath, preview, content.length,
+                                          persistedReaderName(this.tools.map(t => t.name))),
             tool_call_id: tm.tool_call_id,
             name: tm.name,
           });

@@ -78,12 +78,13 @@ function fitSlice(
   const remaining = content.length - offset;
   if (remaining <= 0) return { chunk: '', formatted: '' };
 
-  let lo = 0;
+  // lo starts at 1: with one character left, (0 + 1) / 2 floors to 0 and the
+  // search returned nothing, so the final character and eof were unreachable.
+  let lo = 1;
   let hi = remaining;
   let best = { chunk: '', formatted: '' };
   while (lo <= hi) {
     const size = Math.floor((lo + hi) / 2);
-    if (size === 0) break;
     const chunk = content.slice(offset, offset + size);
     const formatted = build(chunk, offset + chunk.length);
     if (formatted.length <= SAFE_FORMATTED_CHARS) {
@@ -144,6 +145,12 @@ export const readToolResultTool = new DynamicStructuredTool({
       const stat = await handle.stat();
       if (!stat.isFile()) {
         return formatToolResult({ file: name, error: 'Refused: not a regular file.' });
+      }
+      // A hard link is a regular file and not a symlink, so every check above
+      // passes for `ln .env .dexter/tool-results/leak.txt` (reproduced). A
+      // result this tool is meant to read was written once and linked once.
+      if (stat.nlink !== 1) {
+        return formatToolResult({ file: name, error: 'Refused: file has more than one link.' });
       }
       const content = await handle.readFile('utf-8');
       const build = (chunk: string, next: number): string => formatToolResult({

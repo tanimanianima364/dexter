@@ -8,6 +8,7 @@ import { skillTool, SKILL_TOOL_DESCRIPTION } from './skill.js';
 import { createWebFetch, WEB_FETCH_DESCRIPTION } from './fetch/web-fetch.js';
 import { browserTool, BROWSER_DESCRIPTION } from './browser/browser.js';
 import { readFileTool, READ_FILE_DESCRIPTION } from './filesystem/read-file.js';
+import { readToolResultTool, READ_TOOL_RESULT_DESCRIPTION } from './filesystem/read-tool-result.js';
 import { writeFileTool, WRITE_FILE_DESCRIPTION } from './filesystem/write-file.js';
 import { editFileTool, EDIT_FILE_DESCRIPTION } from './filesystem/edit-file.js';
 import { GET_FINANCIALS_DESCRIPTION } from './finance/get-financials.js';
@@ -101,6 +102,13 @@ export function getToolRegistry(model: string): RegisteredTool[] {
       tool: browserTool,
       description: BROWSER_DESCRIPTION,
       compactDescription: 'JavaScript-rendered pages and interactive navigation. Actions: navigate, snapshot, act, read, close.',
+      concurrencySafe: true,
+    },
+    {
+      name: 'read_tool_result',
+      tool: readToolResultTool,
+      description: READ_TOOL_RESULT_DESCRIPTION,
+      compactDescription: 'Read a persisted tool result by file name.',
       concurrencySafe: true,
     },
     {

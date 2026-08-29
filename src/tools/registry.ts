@@ -22,6 +22,7 @@ import { discoverSkills } from '../skills/index.js';
 import { createSpawnSubagent, SPAWN_SUBAGENT_DESCRIPTION } from './subagent/spawn-subagent.js';
 import { createAskUserQuestion, ASK_USER_QUESTION_DESCRIPTION } from './ask-user-question/ask-user-question.js';
 import { createBash, BASH_TOOL_DESCRIPTION } from './bash/bash-tool.js';
+import { ragSearchTool, RAG_SEARCH_DESCRIPTION } from './rag/rag-search.js';
 
 /**
  * A registered tool with its rich description for system prompt injection.
@@ -67,6 +68,13 @@ export function getToolRegistry(model: string): RegisteredTool[] {
       tool: createReadFilings(model),
       description: READ_FILINGS_DESCRIPTION,
       compactDescription: 'SEC filings (10-K, 10-Q, 8-K). Extracts and summarizes specific filing sections.',
+      concurrencySafe: true,
+    },
+    {
+      name: 'rag_search',
+      tool: ragSearchTool,
+      description: RAG_SEARCH_DESCRIPTION,
+      compactDescription: 'Search the published ai-trader RAG index for prior reports and settled outcomes; read-only with provenance.',
       concurrencySafe: true,
     },
     {
